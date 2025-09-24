@@ -81,54 +81,192 @@ error_handler() {
 
 trap 'error_handler $LINENO' ERR
 
+# IP 자동 감지
+get_server_ip() {
+    # 여러 방법으로 IP 감지 시도
+    SERVER_IP=""
+
+    # 방법 1: hostname 명령
+    SERVER_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+
+    # 방법 2: ip 명령
+    if [ -z "$SERVER_IP" ]; then
+        SERVER_IP=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'src \K[^ ]+')
+    fi
+
+    # 방법 3: ifconfig 명령
+    if [ -z "$SERVER_IP" ]; then
+        SERVER_IP=$(ifconfig 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | head -1)
+    fi
+
+    echo "$SERVER_IP"
+}
+
 # 환경 변수 설정
 setup_environment() {
-    show_progress "환경 변수 설정"
+    show_progress "환경 설정 구성"
 
     # 기본 변수
     export WORK_DIR="/opt/monitoring-stack"
     export LOG_DIR="/var/log/monitoring-stack"
     export BACKUP_DIR="/opt/monitoring-stack-backup"
 
-    # Docker Registry 설정 (선택사항)
-    echo -e "${YELLOW}Docker Registry를 사용하시겠습니까? (y/n)${NC}"
-    read -r USE_REGISTRY
+    # 서버 IP 자동 감지
+    SERVER_IP=$(get_server_ip)
 
-    if [[ "$USE_REGISTRY" == "y" || "$USE_REGISTRY" == "Y" ]]; then
-        echo -e "${YELLOW}Docker Registry 주소를 입력하세요:${NC}"
-        read -r DOCKER_REGISTRY
-        export DOCKER_REGISTRY
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}       🔧 환경 설정 구성${NC}"
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}감지된 서버 IP: ${YELLOW}$SERVER_IP${NC}"
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
 
-        echo -e "${YELLOW}Registry 인증이 필요합니까? (y/n)${NC}"
-        read -r NEED_AUTH
+    # 배포 모드 선택
+    echo -e "${YELLOW}배포 모드를 선택하세요:${NC}"
+    echo -e "  1) ${GREEN}빠른 설치${NC} (기본값 사용)"
+    echo -e "  2) ${BLUE}사용자 정의 설치${NC} (세부 설정)"
+    echo -e "  3) ${MAGENTA}폐쇄망 설치${NC} (인터넷 없음)"
+    echo -n "선택 [1-3] (기본값: 1): "
+    read -r -t 10 DEPLOY_MODE || DEPLOY_MODE="1"
+    echo
 
-        if [[ "$NEED_AUTH" == "y" || "$NEED_AUTH" == "Y" ]]; then
-            echo -e "${YELLOW}Username:${NC}"
-            read -r REGISTRY_USER
-            echo -e "${YELLOW}Password:${NC}"
-            read -rs REGISTRY_PASS
-            echo
-            docker login $DOCKER_REGISTRY -u $REGISTRY_USER -p $REGISTRY_PASS
-        fi
-    fi
+    case "$DEPLOY_MODE" in
+        1)
+            echo -e "${GREEN}✅ 빠른 설치 모드 - 기본값 사용${NC}"
+            # 기본값 설정
+            MYSQL_ROOT_PASSWORD="admin123"
+            GRAFANA_ADMIN_USER="admin"
+            GRAFANA_ADMIN_PASSWORD="admin123"
+            USE_NFS="n"
+            USE_REGISTRY="n"
+            ;;
 
-    # NFS 설정 (선택사항)
-    echo -e "${YELLOW}NFS를 사용하시겠습니까? (y/n)${NC}"
-    read -r USE_NFS
+        2)
+            echo -e "${BLUE}🔧 사용자 정의 설치 모드${NC}\n"
 
-    if [[ "$USE_NFS" == "y" || "$USE_NFS" == "Y" ]]; then
-        echo -e "${YELLOW}NFS 서버 IP를 입력하세요:${NC}"
-        read -r NFS_SERVER_IP
-        echo -e "${YELLOW}NFS Export 경로를 입력하세요:${NC}"
-        read -r NFS_EXPORT_PATH
+            # MySQL 설정
+            echo -n "MySQL root 비밀번호 (기본값: admin123): "
+            read -r MYSQL_ROOT_PASSWORD
+            MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-admin123}
 
-        # .env 파일 업데이트
-        sed -i "s/NFS_SERVER_IP=.*/NFS_SERVER_IP=$NFS_SERVER_IP/" $WORK_DIR/.env 2>/dev/null || true
-        sed -i "s/NFS_EXPORT_PATH=.*/NFS_EXPORT_PATH=$NFS_EXPORT_PATH/" $WORK_DIR/.env 2>/dev/null || true
-    fi
+            # Grafana 설정
+            echo -n "Grafana 관리자 계정 (기본값: admin): "
+            read -r GRAFANA_ADMIN_USER
+            GRAFANA_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+
+            echo -n "Grafana 관리자 비밀번호 (기본값: admin123): "
+            read -r GRAFANA_ADMIN_PASSWORD
+            GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin123}
+
+            # NFS 설정
+            echo -n "NFS를 사용하시겠습니까? [y/N]: "
+            read -r USE_NFS
+            USE_NFS=${USE_NFS:-n}
+
+            if [[ "$USE_NFS" == "y" || "$USE_NFS" == "Y" ]]; then
+                echo -n "NFS 서버 IP: "
+                read -r NFS_SERVER_IP
+                echo -n "NFS Export 경로 (기본값: /nfs/shared): "
+                read -r NFS_EXPORT_PATH
+                NFS_EXPORT_PATH=${NFS_EXPORT_PATH:-/nfs/shared}
+            fi
+            ;;
+
+        3)
+            echo -e "${MAGENTA}🔒 폐쇄망 설치 모드${NC}\n"
+
+            # 기본값 설정
+            MYSQL_ROOT_PASSWORD="admin123"
+            GRAFANA_ADMIN_USER="admin"
+            GRAFANA_ADMIN_PASSWORD="admin123"
+
+            # Docker Registry 설정
+            echo -n "Docker Registry 주소: "
+            read -r DOCKER_REGISTRY
+
+            echo -n "Registry 인증이 필요합니까? [y/N]: "
+            read -r NEED_AUTH
+
+            if [[ "$NEED_AUTH" == "y" || "$NEED_AUTH" == "Y" ]]; then
+                echo -n "Registry 사용자명: "
+                read -r REGISTRY_USER
+                echo -n "Registry 비밀번호: "
+                read -rs REGISTRY_PASS
+                echo
+            fi
+
+            export DOCKER_REGISTRY
+            USE_REGISTRY="y"
+            USE_NFS="n"
+            ;;
+
+        *)
+            echo -e "${YELLOW}기본값 사용 (빠른 설치)${NC}"
+            MYSQL_ROOT_PASSWORD="admin123"
+            GRAFANA_ADMIN_USER="admin"
+            GRAFANA_ADMIN_PASSWORD="admin123"
+            USE_NFS="n"
+            USE_REGISTRY="n"
+            ;;
+    esac
 
     # 디렉토리 생성
     mkdir -p $WORK_DIR $LOG_DIR $BACKUP_DIR
+
+    # .env 파일 생성/업데이트
+    cat > $WORK_DIR/.env << EOF
+# 자동 생성된 환경 설정
+# 생성 시간: $(date)
+
+# 서버 설정
+SERVER_IP=$SERVER_IP
+
+# MySQL 설정
+MYSQL_ROOT_PASSWORD=$MYSQL_ROOT_PASSWORD
+MYSQL_DATABASE=monitoring
+
+# Grafana 설정
+GF_SECURITY_ADMIN_USER=$GRAFANA_ADMIN_USER
+GF_SECURITY_ADMIN_PASSWORD=$GRAFANA_ADMIN_PASSWORD
+
+# NFS 설정 (선택사항)
+USE_NFS=$USE_NFS
+NFS_SERVER_IP=${NFS_SERVER_IP:-}
+NFS_EXPORT_PATH=${NFS_EXPORT_PATH:-}
+
+# Docker Registry (선택사항)
+USE_REGISTRY=$USE_REGISTRY
+DOCKER_REGISTRY=${DOCKER_REGISTRY:-}
+EOF
+
+    echo -e "${GREEN}✅ 환경 설정 완료${NC}\n"
+}
+
+# 설정 요약 표시
+show_configuration_summary() {
+    echo -e "\n${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}                     📋 설정 요약${NC}"
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  ${YELLOW}서버 IP${NC}:           $SERVER_IP"
+    echo -e "  ${YELLOW}작업 디렉토리${NC}:     $WORK_DIR"
+    echo -e "  ${YELLOW}MySQL Password${NC}:   $MYSQL_ROOT_PASSWORD"
+    echo -e "  ${YELLOW}Grafana 계정${NC}:     $GRAFANA_ADMIN_USER / $GRAFANA_ADMIN_PASSWORD"
+
+    if [[ "$USE_NFS" == "y" ]]; then
+        echo -e "  ${YELLOW}NFS 서버${NC}:         $NFS_SERVER_IP:$NFS_EXPORT_PATH"
+    fi
+
+    if [[ "$USE_REGISTRY" == "y" ]]; then
+        echo -e "  ${YELLOW}Docker Registry${NC}:  $DOCKER_REGISTRY"
+    fi
+
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+
+    echo -n "이 설정으로 계속하시겠습니까? [Y/n]: "
+    read -r CONFIRM
+    if [[ "$CONFIRM" == "n" || "$CONFIRM" == "N" ]]; then
+        echo -e "${YELLOW}설치가 취소되었습니다.${NC}"
+        exit 0
+    fi
 }
 
 # 메인 실행 함수
@@ -140,8 +278,7 @@ main() {
     START_TIME=$(date +%s)
 
     # 로그 파일 설정
-    LOG_FILE="$LOG_DIR/deploy-$(date +%Y%m%d-%H%M%S).log"
-    mkdir -p $LOG_DIR
+    LOG_FILE="/tmp/deploy-$(date +%Y%m%d-%H%M%S).log"
     exec 1> >(tee -a "$LOG_FILE")
     exec 2>&1
 
@@ -155,6 +292,18 @@ main() {
     SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
     cd $SCRIPT_DIR
 
+    # 환경 설정
+    setup_environment
+
+    # 설정 요약 및 확인
+    show_configuration_summary
+
+    # Registry 로그인 처리
+    if [[ "$USE_REGISTRY" == "y" ]] && [[ ! -z "$REGISTRY_USER" ]]; then
+        show_progress "Docker Registry 로그인"
+        docker login $DOCKER_REGISTRY -u $REGISTRY_USER -p $REGISTRY_PASS
+    fi
+
     # 단계별 실행
     show_progress "[1/5] 필수 패키지 설치"
     bash install-packages.sh
@@ -163,13 +312,16 @@ main() {
     bash setup-services.sh
 
     show_progress "[3/5] 설정 파일 생성"
+    # .env 파일을 create-configs.sh에 전달
+    cp $WORK_DIR/.env ./
     bash create-configs.sh
 
-    # 환경 변수 설정
-    setup_environment
-
     show_progress "[4/5] Docker 이미지 다운로드"
-    bash pull-images.sh
+    if [[ "$USE_REGISTRY" == "y" ]]; then
+        DOCKER_REGISTRY=$DOCKER_REGISTRY bash pull-images.sh
+    else
+        bash pull-images.sh
+    fi
 
     show_progress "[5/5] 서비스 시작"
     cd $WORK_DIR
@@ -186,9 +338,6 @@ main() {
     MINUTES=$((ELAPSED_TIME / 60))
     SECONDS=$((ELAPSED_TIME % 60))
 
-    # 서버 IP 확인
-    SERVER_IP=$(hostname -I | awk '{print $1}')
-
     # 완료 메시지
     echo -e "\n${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${GREEN}🎉 배포가 성공적으로 완료되었습니다! (소요시간: ${MINUTES}분 ${SECONDS}초)${NC}"
@@ -196,7 +345,7 @@ main() {
 
     echo -e "\n${CYAN}📌 서비스 접속 정보:${NC}"
     echo -e "  ${YELLOW}Main Dashboard${NC}:  http://$SERVER_IP"
-    echo -e "  ${YELLOW}Grafana${NC}:         http://$SERVER_IP:3000 (admin/naver123)"
+    echo -e "  ${YELLOW}Grafana${NC}:         http://$SERVER_IP:3000 ($GRAFANA_ADMIN_USER/$GRAFANA_ADMIN_PASSWORD)"
     echo -e "  ${YELLOW}Prometheus${NC}:      http://$SERVER_IP:9090"
     echo -e "  ${YELLOW}Alertmanager${NC}:    http://$SERVER_IP:9093"
     echo -e "  ${YELLOW}Portainer${NC}:       http://$SERVER_IP:9000"
@@ -209,13 +358,37 @@ main() {
     echo -e "  ${YELLOW}서비스 중지${NC}:     cd $WORK_DIR && docker-compose down"
     echo -e "  ${YELLOW}서비스 시작${NC}:     cd $WORK_DIR && docker-compose up -d"
 
-    echo -e "\n${CYAN}📌 시스템 정보:${NC}"
-    echo -e "  ${YELLOW}작업 디렉토리${NC}:   $WORK_DIR"
-    echo -e "  ${YELLOW}로그 디렉토리${NC}:   $LOG_DIR"
-    echo -e "  ${YELLOW}백업 디렉토리${NC}:   $BACKUP_DIR"
-    echo -e "  ${YELLOW}설치 로그${NC}:       $LOG_FILE"
+    echo -e "\n${CYAN}📌 접속 정보 다시 보기:${NC}"
+    echo -e "  ${YELLOW}cat $WORK_DIR/.env${NC}"
 
     echo -e "\n${GREEN}🔥 모든 서비스가 정상적으로 실행중입니다!${NC}\n"
+
+    # 접속 정보를 파일로 저장
+    cat > $WORK_DIR/access-info.txt << EOF
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       모니터링 스택 접속 정보
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+생성 시간: $(date)
+서버 IP: $SERVER_IP
+
+서비스 URL:
+- Main Dashboard:  http://$SERVER_IP
+- Grafana:         http://$SERVER_IP:3000
+  계정: $GRAFANA_ADMIN_USER / $GRAFANA_ADMIN_PASSWORD
+- Prometheus:      http://$SERVER_IP:9090
+- Alertmanager:    http://$SERVER_IP:9093
+- Portainer:       http://$SERVER_IP:9000
+- HAProxy Stats:   http://$SERVER_IP:8404/stats
+  계정: admin / admin
+
+MySQL:
+- Host: $SERVER_IP
+- Port: 3306
+- Root Password: $MYSQL_ROOT_PASSWORD
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EOF
+
+    echo -e "${YELLOW}접속 정보가 $WORK_DIR/access-info.txt 에 저장되었습니다.${NC}"
 }
 
 # 스크립트 실행
