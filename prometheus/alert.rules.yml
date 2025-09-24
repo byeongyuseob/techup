@@ -1,26 +1,15 @@
 groups:
-  - name: nginx_alerts
+  - name: critical_service_alerts
     rules:
-      - alert: NginxHighConnectionCount
-        expr: nginx_connections_active > 100
-        for: 1m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High Nginx connection count"
-          description: "Nginx active connections are above 100 (current: {{ $value }})"
-
-      - alert: NginxDown
-        expr: up{job="nginx"} == 0
+      - alert: ServiceDown
+        expr: up{job=~"nginx|haproxy"} == 0
         for: 1m
         labels:
           severity: critical
         annotations:
-          summary: "Nginx Exporter is down"
-          description: "Nginx exporter has been down for more than 1 minute"
+          summary: "Critical service is down"
+          description: "Service {{ $labels.job }} has been down for more than 1 minute"
 
-  - name: haproxy_alerts
-    rules:
       - alert: HAProxyBackendDown
         expr: haproxy_backend_up == 0
         for: 1m
@@ -30,31 +19,89 @@ groups:
           summary: "HAProxy backend is down"
           description: "HAProxy backend {{ $labels.backend }} is down"
 
-      - alert: HAProxyHighSessionRate
-        expr: rate(haproxy_backend_sessions_total[5m]) > 100
+  - name: resource_alerts
+    rules:
+      - alert: HighCPUUsage
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100) > 80
         for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "High HAProxy session rate"
-          description: "HAProxy session rate is high (current: {{ $value }})"
-
-  - name: system_alerts
-    rules:
-      - alert: HighCPUUsage
-        expr: rate(node_cpu_seconds_total{mode!="idle"}[5m]) * 100 > 80
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
           summary: "High CPU usage detected"
-          description: "CPU usage is above 80% (current: {{ $value }}%)"
+          description: "CPU usage is above 80% on {{ $labels.instance }}"
+
+      - alert: TestAlert
+        expr: up{job="prometheus"} == 1
+        for: 1m
+        labels:
+          severity: info
+        annotations:
+          summary: "Test alert - Prometheus is running"
+          description: "This is a test alert to verify alerting system"
 
       - alert: HighMemoryUsage
         expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
-        for: 5m
+        for: 2m
         labels:
           severity: warning
         annotations:
           summary: "High memory usage detected"
-          description: "Memory usage is above 85% (current: {{ $value }}%)"
+          description: "Memory usage is above 85% on {{ $labels.instance }}"
+
+      - alert: DiskSpaceLow
+        expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"})) * 100 > 90
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk space critically low"
+          description: "Disk usage is above 90% on {{ $labels.instance }} ({{ $labels.mountpoint }})"
+
+  - name: container_alerts
+    rules:
+      - alert: ContainerHighCPU
+        expr: rate(container_cpu_usage_seconds_total{name!=""}[2m]) * 100 > 80
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container high CPU usage"
+          description: "Container {{ $labels.name }} CPU usage is {{ $value | printf \"%.1f\" }}%"
+
+      - alert: ContainerHighMemory
+        expr: (container_memory_usage_bytes{name!=""} / container_spec_memory_limit_bytes{name!=""}) * 100 > 90
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container high memory usage"
+          description: "Container {{ $labels.name }} memory usage is {{ $value | printf \"%.1f\" }}%"
+
+      - alert: ContainerRestart
+        expr: rate(container_start_time_seconds{name!=""}[10m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container restarted"
+          description: "Container {{ $labels.name }} has restarted"
+
+  - name: performance_alerts
+    rules:
+      - alert: HighRequestRate
+        expr: rate(nginx_http_requests_total[5m]) > 100
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High request rate detected"
+          description: "Request rate is {{ $value | printf \"%.1f\" }} req/s"
+
+      - alert: HAProxyHighResponseTime
+        expr: haproxy_backend_http_response_time_average_seconds > 1.0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HAProxy response time"
+          description: "HAProxy response time is {{ $value | printf \"%.2f\" }}s on {{ $labels.backend }}"

@@ -30,3 +30,13 @@ scrape_configs:
     static_configs:
       - targets: ['node-exporter:9100']
     scrape_interval: 10s
+
+  - job_name: 'docker-stats'
+    static_configs:
+      - targets: ['multi-exporter:9150']
+    scrape_interval: 30s
+
+  - job_name: 'multi-metrics'
+    static_configs:
+      - targets: ['multi-exporter:9170']
+    scrape_interval: 30s

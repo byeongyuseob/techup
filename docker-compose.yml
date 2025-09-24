@@ -20,11 +20,13 @@ services:
       dockerfile: Dockerfile
     volumes:
       - ./web:/var/www/html
-      - type: volume
-        source: nfs-shared
-        target: /var/www/html/nfs
-        volume:
-          nocopy: true
+    environment:
+      - NFS_SERVER_IP=${NFS_SERVER_IP}
+      - NFS_EXPORT_PATH=${NFS_EXPORT_PATH}
+    privileged: true
+    cap_add:
+      - SYS_ADMIN
+      - DAC_READ_SEARCH
     networks:
       webnet:
         aliases:
@@ -92,13 +94,16 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=naver123
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/etc/grafana/dashboards:ro
     networks:
       - webnet
+    depends_on:
+      - prometheus
 
   nginx-exporter:
     image: nginx/nginx-prometheus-exporter:latest
@@ -106,9 +111,10 @@ services:
     ports:
       - "9113:9113"
     command:
-      - '-nginx.scrape-uri=http://nginx-backend/nginx_status'
+      - '--nginx.scrape-uri=http://haproxy/nginx_status'
     depends_on:
       - nginx
+      - haproxy
     networks:
       - webnet
 
@@ -129,14 +135,41 @@ services:
     networks:
       - webnet
 
+  multi-exporter:
+    image: python:3.9-alpine
+    container_name: multi-exporter
+    ports:
+      - "9150:9150"
+      - "9170:9170"
+    volumes:
+      - ./docker-stats-exporter.py:/app/docker-stats-exporter.py:ro
+      - ./multi-exporter.py:/app/multi-exporter.py:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+    command: sh -c "apk add --no-cache docker-cli nfs-utils && pip install requests docker && (python /app/docker-stats-exporter.py &) && (python /app/multi-exporter.py &) && tail -f /dev/null"
+    restart: unless-stopped
+    networks:
+      - webnet
+    depends_on:
+      - mysql
+      - haproxy
+
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    ports:
+      - "9000:9000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - portainer_data:/data
+    restart: unless-stopped
+    networks:
+      - webnet
+
 volumes:
   grafana_data:
-  nfs-shared:
-    driver: local
-    driver_opts:
-      type: nfs
-      o: addr=10.95.137.10,rw,nolock,hard,intr
-      device: ":/nfs/shared"
+  portainer_data:
 
 networks:
   webnet:

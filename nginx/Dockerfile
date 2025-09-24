@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y \
     nfs-common \
     stress \
     htop \
+    iputils-ping \
+    net-tools \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /var/www/html/nfs
@@ -22,6 +24,7 @@ RUN sed -i 's/;cgi.fix_pathinfo=1/cgi.fix_pathinfo=0/' /etc/php/8.1/fpm/php.ini
 EXPOSE 80
 
 COPY start.sh /start.sh
-RUN chmod +x /start.sh
+COPY nfs-monitor.sh /nfs-monitor.sh
+RUN chmod +x /start.sh /nfs-monitor.sh
 
 CMD ["/start.sh"]
