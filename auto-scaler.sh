@@ -1,107 +1,65 @@
 #!/bin/bash
 
-# Configuration
-MIN_REPLICAS=2
-MAX_REPLICAS=6
-SCALE_OUT_CPU_THRESHOLD=20  # 테스트를 위해 낮게 설정
-SCALE_IN_CPU_THRESHOLD=5   # 테스트를 위해 낮게 설정
-COOLDOWN_PERIOD=15          # 스케일링 후 대기 시간(초)
+# 오토스케일링 설정
+MIN_INSTANCES=2
+MAX_INSTANCES=10
+CPU_THRESHOLD_UP=70
+CPU_THRESHOLD_DOWN=30
+REQ_THRESHOLD_UP=100
+REQ_THRESHOLD_DOWN=50
+CHECK_INTERVAL=30
 
-# State
-LAST_SCALE_TIME=0
-STATE_FILE="/tmp/scaler.state"
+# 색상 정의
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
 
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
-}
-
-get_current_replicas() {
-    # Docker Compose로 실행 중인 nginx 컨테이너 수
-    docker compose -f docker-compose.yml ps nginx 2>/dev/null | grep -c "nginx-"
-}
-
-get_avg_cpu() {
-    # nginx 컨테이너들의 평균 CPU 사용률
-    local cpu_sum=0
-    local count=0
-
-    for container in $(docker compose -f docker-compose.yml ps nginx --quiet 2>/dev/null); do
-        cpu=$(docker stats --no-stream --format "{{.CPUPerc}}" $container 2>/dev/null | sed 's/%//')
-        if [ ! -z "$cpu" ]; then
-            cpu_int=$(echo "$cpu" | cut -d'.' -f1)
-            cpu_sum=$((cpu_sum + cpu_int))
-            count=$((count + 1))
-        fi
-    done
-
-    if [ $count -eq 0 ]; then
-        echo "0"
-    else
-        echo $((cpu_sum / count))
-    fi
-}
-
-check_cooldown() {
-    if [ -f "$STATE_FILE" ]; then
-        LAST_SCALE_TIME=$(cat "$STATE_FILE" 2>/dev/null || echo 0)
-    fi
-
-    CURRENT_TIME=$(date +%s)
-    TIME_DIFF=$((CURRENT_TIME - LAST_SCALE_TIME))
-
-    if [ $TIME_DIFF -lt $COOLDOWN_PERIOD ]; then
-        return 1  # Still in cooldown
-    fi
-    return 0  # Not in cooldown
-}
-
-update_cooldown() {
-    date +%s > "$STATE_FILE"
-}
-
-scale_nginx() {
-    local new_count=$1
-    log "🔧 Scaling nginx to $new_count replicas"
-
-    # Docker Compose scale command
-    docker compose -f /root/workspace/docker-compose.yml up -d --scale nginx=$new_count --no-recreate
-
-    update_cooldown
-    log "✅ Scaling completed. Current replicas: $new_count"
-}
-
-# Main loop
-log "🚀 Auto-scaler started"
-log "   Thresholds: CPU Out=$SCALE_OUT_CPU_THRESHOLD%, In=$SCALE_IN_CPU_THRESHOLD%"
-log "   Replicas: Min=$MIN_REPLICAS, Max=$MAX_REPLICAS"
-log "   Cooldown: ${COOLDOWN_PERIOD}s"
+echo -e "${GREEN}[Auto-Scaler] 오토스케일러 시작${NC}"
+echo -e "${GREEN}[Auto-Scaler] 설정: MIN=$MIN_INSTANCES, MAX=$MAX_INSTANCES${NC}"
+echo -e "${GREEN}[Auto-Scaler] CPU: UP>$CPU_THRESHOLD_UP%, DOWN<$CPU_THRESHOLD_DOWN%${NC}"
+echo -e "${GREEN}[Auto-Scaler] 요청: UP>$REQ_THRESHOLD_UP/s, DOWN<$REQ_THRESHOLD_DOWN/s${NC}"
 
 while true; do
-    CURRENT_REPLICAS=$(get_current_replicas)
-    AVG_CPU=$(get_avg_cpu)
+    # 현재 Nginx 인스턴스 수
+    current_instances=$(docker ps --filter "name=nginx" --format "{{.Names}}" | wc -l)
 
-    log "📊 Status: Replicas=$CURRENT_REPLICAS, Avg CPU=${AVG_CPU}%"
+    # CPU 사용률 확인 (Prometheus에서)
+    cpu_usage=$(curl -s "http://localhost:9090/api/v1/query?query=avg(rate(container_cpu_usage_seconds_total[1m]))*100" | \
+                grep -o '"value":\[[0-9.]*,"[0-9.]*"' | \
+                sed 's/.*,"\([0-9.]*\)".*/\1/' | \
+                cut -d. -f1)
 
-    # Check cooldown
-    if ! check_cooldown; then
-        log "   ⏳ In cooldown period, waiting..."
-        sleep 5
-        continue
+    # 요청 속도 확인 (HAProxy 메트릭)
+    req_rate=$(curl -s "http://localhost:8404/metrics" | \
+               grep "haproxy_backend_http_requests_total" | \
+               grep "nginx-backend" | \
+               awk '{print $2}' | \
+               head -1)
+
+    # 기본값 설정
+    cpu_usage=${cpu_usage:-0}
+    req_rate=${req_rate:-0}
+
+    echo -e "${YELLOW}[$(date '+%Y-%m-%d %H:%M:%S')] 현재 상태: 인스턴스=$current_instances, CPU=$cpu_usage%, 요청=$req_rate/s${NC}"
+
+    # 스케일 업 조건
+    if [[ $current_instances -lt $MAX_INSTANCES ]] && \
+       ([[ $cpu_usage -gt $CPU_THRESHOLD_UP ]] || [[ ${req_rate%.*} -gt $REQ_THRESHOLD_UP ]]); then
+        new_instances=$((current_instances + 1))
+        echo -e "${RED}[Auto-Scaler] 스케일 업: $current_instances → $new_instances${NC}"
+        docker compose up -d --scale nginx=$new_instances --no-recreate
+        sleep 10  # 안정화 대기
+
+    # 스케일 다운 조건
+    elif [[ $current_instances -gt $MIN_INSTANCES ]] && \
+         [[ $cpu_usage -lt $CPU_THRESHOLD_DOWN ]] && \
+         [[ ${req_rate%.*} -lt $REQ_THRESHOLD_DOWN ]]; then
+        new_instances=$((current_instances - 1))
+        echo -e "${GREEN}[Auto-Scaler] 스케일 다운: $current_instances → $new_instances${NC}"
+        docker compose up -d --scale nginx=$new_instances --no-recreate
+        sleep 10  # 안정화 대기
     fi
 
-    # Scaling decision
-    if [ $AVG_CPU -gt $SCALE_OUT_CPU_THRESHOLD ] && [ $CURRENT_REPLICAS -lt $MAX_REPLICAS ]; then
-        NEW_REPLICAS=$((CURRENT_REPLICAS + 1))
-        log "📈 SCALE OUT triggered! CPU ${AVG_CPU}% > ${SCALE_OUT_CPU_THRESHOLD}%"
-        scale_nginx $NEW_REPLICAS
-
-    elif [ $AVG_CPU -lt $SCALE_IN_CPU_THRESHOLD ] && [ $CURRENT_REPLICAS -gt $MIN_REPLICAS ]; then
-        NEW_REPLICAS=$((CURRENT_REPLICAS - 1))
-        log "📉 SCALE IN triggered! CPU ${AVG_CPU}% < ${SCALE_IN_CPU_THRESHOLD}%"
-        scale_nginx $NEW_REPLICAS
-    else
-        log "   ✔️ No scaling needed"
-    fi
-
-    sleep 5
+    sleep $CHECK_INTERVAL
 done

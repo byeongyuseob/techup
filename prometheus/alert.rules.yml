@@ -1,0 +1,60 @@
+groups:
+  - name: nginx_alerts
+    rules:
+      - alert: NginxHighConnectionCount
+        expr: nginx_connections_active > 100
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High Nginx connection count"
+          description: "Nginx active connections are above 100 (current: {{ $value }})"
+
+      - alert: NginxDown
+        expr: up{job="nginx"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Nginx Exporter is down"
+          description: "Nginx exporter has been down for more than 1 minute"
+
+  - name: haproxy_alerts
+    rules:
+      - alert: HAProxyBackendDown
+        expr: haproxy_backend_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "HAProxy backend is down"
+          description: "HAProxy backend {{ $labels.backend }} is down"
+
+      - alert: HAProxyHighSessionRate
+        expr: rate(haproxy_backend_sessions_total[5m]) > 100
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HAProxy session rate"
+          description: "HAProxy session rate is high (current: {{ $value }})"
+
+  - name: system_alerts
+    rules:
+      - alert: HighCPUUsage
+        expr: rate(node_cpu_seconds_total{mode!="idle"}[5m]) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage detected"
+          description: "CPU usage is above 80% (current: {{ $value }}%)"
+
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage detected"
+          description: "Memory usage is above 85% (current: {{ $value }}%)"
