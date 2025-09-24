@@ -11,7 +11,7 @@ class NFSMonitor:
         self.metrics_data = {}
         self.lock = threading.Lock()
         self.nfs_mount_path = "/var/www/html/nfs"
-        self.nfs_server = "10.95.137.10"
+        self.nfs_server = "192.168.0.200"
 
     def check_nfs_mount_status(self):
         """Check if NFS is mounted and accessible"""

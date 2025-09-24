@@ -1,0 +1,191 @@
+version: '3.8'
+
+services:
+  # Prometheus - 메트릭 수집 및 저장
+  prometheus:
+    image: prometheus-packed:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    restart: unless-stopped
+    networks:
+      - monitoring
+
+  # Grafana - 시각화
+  grafana:
+    image: grafana-packed:latest
+    container_name: grafana
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=naver123
+      - GF_INSTALL_PLUGINS=
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+
+  # Alertmanager - 알람 관리
+  alertmanager:
+    image: alertmanager-packed:latest
+    container_name: alertmanager
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "9093:9093"
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    restart: unless-stopped
+    networks:
+      - monitoring
+
+  # Node Exporter - 노드 메트릭 수집
+  node-exporter:
+    image: node-exporter-packed:latest
+    container_name: node-exporter
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    restart: unless-stopped
+    networks:
+      - monitoring
+
+  # Multi Exporter - 커스텀 메트릭 수집
+  multi-exporter:
+    image: multi-exporter-packed:latest
+    container_name: multi-exporter
+    volumes:
+      - ./multi_exporter.py:/app/multi_exporter.py:ro
+    ports:
+      - "8000:8000"
+    environment:
+      - FLASK_APP=multi_exporter.py
+    working_dir: /app
+    command: python /app/multi_exporter.py
+    restart: unless-stopped
+    networks:
+      - monitoring
+
+  # Alert Webhook - 알람 수신 및 처리
+  alert-webhook:
+    image: alert-webhook-packed:latest
+    container_name: alert-webhook
+    volumes:
+      - ./alert_webhook.py:/app/alert_webhook.py:ro
+    ports:
+      - "5000:5000"
+    working_dir: /app
+    command: python /app/alert_webhook.py
+    restart: unless-stopped
+    networks:
+      - monitoring
+
+  # MySQL - 데이터베이스
+  mysql:
+    image: mysql-packed:latest
+    container_name: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword123!
+      MYSQL_DATABASE: monitoring
+      MYSQL_USER: monitor
+      MYSQL_PASSWORD: monitor123!
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    restart: unless-stopped
+    networks:
+      - monitoring
+
+  # HAProxy - 로드 밸런서
+  haproxy:
+    image: haproxy-packed:latest
+    container_name: haproxy
+    volumes:
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "8080:8080"  # Stats UI
+      - "80:80"      # HTTP
+      - "443:443"    # HTTPS
+    restart: unless-stopped
+    networks:
+      - monitoring
+
+  # Nginx - 웹 서버
+  nginx:
+    image: nginx-packed:latest
+    container_name: nginx
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/html:/usr/share/nginx/html:ro
+    ports:
+      - "8081:80"
+      - "8443:443"
+    restart: unless-stopped
+    networks:
+      - monitoring
+
+  # Nginx Exporter - Nginx 메트릭 수집
+  nginx-exporter:
+    image: nginx-exporter-packed:latest
+    container_name: nginx-exporter
+    ports:
+      - "9113:9113"
+    command:
+      - '-nginx.scrape-uri=http://nginx/nginx_status'
+    restart: unless-stopped
+    networks:
+      - monitoring
+    depends_on:
+      - nginx
+
+  # Portainer - Docker 관리 UI
+  portainer:
+    image: portainer-packed:latest
+    container_name: portainer
+    environment:
+      - ADMIN_PASSWORD=naver123
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer-data:/data
+    ports:
+      - "9000:9000"
+    restart: unless-stopped
+    networks:
+      - monitoring
+
+networks:
+  monitoring:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  alertmanager-data:
+  mysql-data:
+  portainer-data:

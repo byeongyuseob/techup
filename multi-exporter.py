@@ -15,7 +15,7 @@ class MultiExporter:
         self.metrics_data = {}
         self.lock = threading.Lock()
         self.nfs_mount_path = "/var/www/html/nfs"
-        self.nfs_server = "10.95.137.10"
+        self.nfs_server = "192.168.0.200"
         self.haproxy_stats_url = "http://haproxy:8404/stats;csv"
 
         # Docker client

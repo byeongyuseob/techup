@@ -10,7 +10,7 @@ if [ $# -eq 0 ]; then
 fi
 
 NEW_IP=$1
-OLD_IP="10.95.137.10"
+OLD_IP="192.168.0.200"
 
 echo "NFS 서버 IP를 $OLD_IP 에서 $NEW_IP 로 변경합니다..."
 

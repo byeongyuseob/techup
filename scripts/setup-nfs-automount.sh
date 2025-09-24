@@ -3,7 +3,7 @@
 # 호스트 시스템에 NFS 자동 마운트 설정
 # systemd mount unit을 사용하여 자동 재연결 구현
 
-NFS_SERVER="${1:-192.168.0.240}"
+NFS_SERVER="${1:-192.168.0.200}"
 NFS_PATH="${2:-/nfs/shared}"
 MOUNT_POINT="/mnt/nfs-shared"
 
